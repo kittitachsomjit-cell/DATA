@@ -1,0 +1,211 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>แดชบอร์ดการรับสมัครงาน</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Thai:wght@400;500;600;700&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<style>
+  :root{
+    --bg:#f2f5f7; --surface:#ffffff; --ink:#15262f; --muted:#5d7079; --line:#d6dfe4;
+    --accent:#0f4c5c; --amber:#d98a1c;
+  }
+  @media (prefers-color-scheme: dark){
+    :root{ --bg:#0f1a20; --surface:#16252d; --ink:#e6eef2; --muted:#93a8b2; --line:#2a3d47; --accent:#6fb7c8; --amber:#f0b04a; }
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font-family:'IBM Plex Sans Thai',system-ui,sans-serif;line-height:1.6}
+  main{max-width:1100px;margin:0 auto;padding:28px 20px 56px}
+  header{display:flex;flex-wrap:wrap;gap:16px;justify-content:space-between;align-items:flex-end;margin-bottom:24px}
+  h1{font-size:1.6rem;margin:0;font-weight:700;letter-spacing:-.01em}
+  .sub{color:var(--muted);font-size:.9rem;margin-top:2px}
+  .controls{display:flex;flex-wrap:wrap;gap:12px;align-items:center}
+  .seg{display:inline-flex;border:1px solid var(--line);border-radius:8px;overflow:hidden;background:var(--surface)}
+  .seg button{font:inherit;border:0;background:transparent;color:var(--muted);padding:7px 16px;cursor:pointer}
+  .seg button[aria-pressed="true"]{background:var(--accent);color:#fff;font-weight:600}
+  select,.refresh{font:inherit;border:1px solid var(--line);background:var(--surface);color:var(--ink);border-radius:8px;padding:7px 12px}
+  .refresh{cursor:pointer}
+  button:focus-visible,select:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+
+  .totals{display:flex;flex-wrap:wrap;gap:8px 44px;padding:4px 0 22px}
+  .totals div{min-width:120px}
+  .totals b{display:block;font-size:2.1rem;font-weight:700;line-height:1.15;font-variant-numeric:tabular-nums}
+  .totals span{color:var(--muted);font-size:.88rem}
+
+  .panel{background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:18px}
+  .chartwrap{position:relative;height:380px}
+  h2{font-size:1rem;margin:0 0 12px;font-weight:600}
+  .tablewrap{overflow-x:auto;margin-top:18px}
+  table{border-collapse:collapse;width:100%;font-size:.92rem;font-variant-numeric:tabular-nums}
+  th,td{padding:9px 12px;text-align:right;border-bottom:1px solid var(--line);white-space:nowrap}
+  th:first-child,td:first-child{text-align:left}
+  th{font-weight:600;color:var(--muted);background:transparent}
+  tfoot td{font-weight:700;border-bottom:0}
+  .state{padding:60px 0;text-align:center;color:var(--muted)}
+  .err{color:#b3261e}
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <div>
+      <h1>การรับสมัครงานรายตำแหน่ง</h1>
+      <div class="sub" id="updated">กำลังโหลดข้อมูล…</div>
+    </div>
+    <div class="controls">
+      <div class="seg" role="group" aria-label="มุมมอง">
+        <button data-view="day" aria-pressed="false">รายวัน</button>
+        <button data-view="week" aria-pressed="true">รายสัปดาห์</button>
+        <button data-view="month" aria-pressed="false">รายเดือน</button>
+      </div>
+      <select id="pos" aria-label="ตำแหน่งงาน"></select>
+      <button class="refresh" id="refresh">รีเฟรชข้อมูล</button>
+    </div>
+  </header>
+
+  <div class="totals" id="totals"></div>
+
+  <section class="panel">
+    <h2>จำนวนที่แชร์ (แท่ง) และผู้สมัคร (เส้น)</h2>
+    <div class="chartwrap"><canvas id="chart"></canvas></div>
+    <div class="tablewrap"><table id="table"></table></div>
+  </section>
+</main>
+
+<script>
+// วางลิงก์ /exec ของเว็บแอป Apps Script ตรงนี้ (ได้จากขั้นตอน ติดตั้ง → เว็บแอป)
+const API_URL = 'https://script.google.com/macros/s/วางรหัสของคุณตรงนี้/exec';
+const REFRESH_SECONDS = 30;   // ดึงข้อมูลใหม่จากชีททุกกี่วินาที
+let lastSnapshot = '';
+
+const TH = ['ม.ค.','ก.พ.','มี.ค.','เม.ย.','พ.ค.','มิ.ย.','ก.ค.','ส.ค.','ก.ย.','ต.ค.','พ.ย.','ธ.ค.'];
+const COLORS = ['#0f4c5c','#4c78a8','#7ba05b','#9aa5ad','#8f6bb3','#c5655d'];
+let DATA = null, chart = null, view = 'week', pos = 'all';
+
+const pd = s => { const [y,m,d] = s.split('-').map(Number); return new Date(y, m-1, d); };
+const fmt = d => d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
+const num = n => n.toLocaleString('th-TH');
+
+function keyOf(s){
+  if (view === 'day') return s;
+  if (view === 'month') return s.slice(0,7);
+  const d = pd(s); d.setDate(d.getDate() - ((d.getDay()+6)%7));   // สัปดาห์เริ่มวันจันทร์
+  return fmt(d);
+}
+function labelOf(k){
+  if (view === 'day'){ const d = pd(k); return d.getDate()+' '+TH[d.getMonth()]; }
+  if (view === 'month'){ const [y,m] = k.split('-'); return TH[m-1]+' '+(+y+543); }
+  const a = pd(k), b = new Date(a); b.setDate(a.getDate()+6);
+  return a.getDate()+(a.getMonth()===b.getMonth()?'':' '+TH[a.getMonth()])+'–'+b.getDate()+' '+TH[b.getMonth()];
+}
+
+function group(){
+  const n = DATA.positions.length, map = new Map();
+  DATA.rows.forEach(r => {
+    const k = keyOf(r.date);
+    if (!map.has(k)) map.set(k, {shared:Array(n).fill(0), app:Array(n).fill(0), days:0});
+    const g = map.get(k);
+    r.shared.forEach((v,i) => g.shared[i] += v);
+    r.applicants.forEach((v,i) => g.app[i] += v);
+    g.days++;
+  });
+  return [...map.entries()].sort((a,b) => a[0] < b[0] ? -1 : 1);
+}
+
+function render(){
+  const idx = pos === 'all' ? DATA.positions.map((_,i)=>i) : [Number(pos)];
+  const groups = group();
+  const labels = groups.map(g => labelOf(g[0]));
+  const sum = a => a.reduce((x,y)=>x+y,0);
+
+  const sharedTotal = groups.reduce((s,g)=> s + sum(idx.map(i=>g[1].shared[i])), 0);
+  const appTotal = groups.reduce((s,g)=> s + sum(idx.map(i=>g[1].app[i])), 0);
+  const days = DATA.rows.length;
+
+  document.getElementById('totals').innerHTML =
+    `<div><b>${num(sharedTotal)}</b><span>จำนวนที่แชร์รวม</span></div>
+     <div><b>${num(appTotal)}</b><span>ผู้สมัครรวม</span></div>
+     <div><b>${days ? num(Math.round(sharedTotal/days)) : 0}</b><span>แชร์เฉลี่ยต่อวัน (${days} วันที่มีข้อมูล)</span></div>`;
+
+  const datasets = idx.map(i => ({
+    type:'bar', label:DATA.positions[i], data:groups.map(g=>g[1].shared[i]),
+    backgroundColor:COLORS[i % COLORS.length], stack:'s', yAxisID:'y'
+  }));
+  datasets.push({
+    type:'line', label:'ผู้สมัคร', data:groups.map(g=>sum(idx.map(i=>g[1].app[i]))),
+    borderColor:getComputedStyle(document.documentElement).getPropertyValue('--amber').trim(),
+    backgroundColor:'transparent', borderWidth:3, pointRadius:4, tension:.25, yAxisID:'y2'
+  });
+
+  if (chart) chart.destroy();
+  const ink = getComputedStyle(document.documentElement).getPropertyValue('--muted').trim();
+  const grid = getComputedStyle(document.documentElement).getPropertyValue('--line').trim();
+  Chart.defaults.font.family = "'IBM Plex Sans Thai', sans-serif";
+  chart = new Chart(document.getElementById('chart'), {
+    data:{labels, datasets},
+    options:{
+      responsive:true, maintainAspectRatio:false,
+      interaction:{mode:'index', intersect:false},
+      plugins:{legend:{position:'bottom', labels:{color:ink, usePointStyle:true}}},
+      scales:{
+        x:{stacked:true, ticks:{color:ink}, grid:{display:false}},
+        y:{stacked:true, beginAtZero:true, ticks:{color:ink}, grid:{color:grid}, title:{display:true, text:'จำนวนที่แชร์', color:ink}},
+        y2:{position:'right', beginAtZero:true, ticks:{color:ink, precision:0}, grid:{display:false}, title:{display:true, text:'ผู้สมัคร', color:ink}}
+      }
+    }
+  });
+
+  let h = '<thead><tr><th>ช่วงเวลา</th>' + idx.map(i=>`<th>${DATA.positions[i]}</th>`).join('') + '<th>รวมแชร์</th><th>ผู้สมัคร</th></tr></thead><tbody>';
+  groups.forEach((g,gi) => {
+    h += `<tr><td>${labels[gi]}</td>` + idx.map(i=>`<td>${num(g[1].shared[i])}</td>`).join('') +
+         `<td>${num(sum(idx.map(i=>g[1].shared[i])))}</td><td>${num(sum(idx.map(i=>g[1].app[i])))}</td></tr>`;
+  });
+  h += '</tbody><tfoot><tr><td>รวมทั้งหมด</td>' +
+       idx.map(i=>`<td>${num(groups.reduce((s,g)=>s+g[1].shared[i],0))}</td>`).join('') +
+       `<td>${num(sharedTotal)}</td><td>${num(appTotal)}</td></tr></tfoot>`;
+  document.getElementById('table').innerHTML = h;
+}
+
+function setData(d){
+  DATA = d;
+  const sel = document.getElementById('pos'), cur = sel.value || 'all';
+  sel.innerHTML = '<option value="all">ทุกตำแหน่ง</option>' + d.positions.map((p,i)=>`<option value="${i}">${p}</option>`).join('');
+  sel.value = cur; pos = sel.value;
+  document.getElementById('updated').textContent = 'อัปเดตล่าสุด ' + d.updated;
+  render();
+}
+function showError(e){
+  document.getElementById('updated').innerHTML = '<span class="err">โหลดข้อมูลไม่สำเร็จ: ' + (e.message || e) + '</span>';
+}
+function load(manual){
+  if (!DATA || manual) document.getElementById('updated').textContent = 'กำลังโหลดข้อมูล…';
+  fetch(API_URL + '?action=getDashboard', {redirect:'follow', cache:'no-store'})
+    .then(r => r.json())
+    .then(d => {
+      if (d.error) throw new Error(d.error);
+      const snap = JSON.stringify(d.rows) + JSON.stringify(d.positions);
+      if (snap === lastSnapshot && DATA){
+        document.getElementById('updated').textContent = 'อัปเดตล่าสุด ' + d.updated;
+        return;
+      }
+      lastSnapshot = snap;
+      setData(d);
+    })
+    .catch(showError);
+}
+
+document.querySelectorAll('[data-view]').forEach(b => b.addEventListener('click', () => {
+  view = b.dataset.view;
+  document.querySelectorAll('[data-view]').forEach(x => x.setAttribute('aria-pressed', x === b));
+  if (DATA) render();
+}));
+document.getElementById('pos').addEventListener('change', e => { pos = e.target.value; render(); });
+document.getElementById('refresh').addEventListener('click', () => load(true));
+load();
+setInterval(() => { if (!document.hidden) load(); }, REFRESH_SECONDS * 1000);
+document.addEventListener('visibilitychange', () => { if (!document.hidden) load(); });
+</script>
+</body>
+</html>
